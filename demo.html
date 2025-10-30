@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>ModelMatch – Demo</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    :root { --bg:#0b0f14; --card:#121821; --text:#e7edf5; --muted:#a8b3c7; --accent:#5aa9ff; --ok:#37c77c; --warn:#ffb020; }
+    html,body { margin:0; padding:0; background:var(--bg); color:var(--text); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; }
+    .wrap { max-width: 900px; margin: 40px auto; padding: 0 16px; }
+    .title { font-size: 28px; font-weight: 800; letter-spacing:.3px; display:flex; gap:10px; align-items:center; }
+    .title .dot { width:10px; height:10px; border-radius:50%; background:var(--accent); box-shadow:0 0 14px var(--accent); }
+    .card { background: var(--card); border:1px solid #1f2a38; border-radius:16px; padding:18px; box-shadow: 0 8px 28px rgba(0,0,0,.35); }
+    .row { display:flex; gap:16px; flex-wrap:wrap; }
+    textarea { width:100%; min-height:120px; resize:vertical; background:#0c121a; color:var(--text); border:1px solid #1f2a38; border-radius:12px; padding:12px; font-size:14px; }
+    button { background: var(--accent); color:#071019; border:none; border-radius:12px; padding:12px 16px; font-weight:700; cursor:pointer; }
+    button:disabled { opacity:.6; cursor:not-allowed; }
+    .meta { display:flex; gap:12px; flex-wrap:wrap; margin-top:10px; font-size:13px; color:var(--muted); }
+    .pill { background:#0e1520; border:1px solid #1f2a38; padding:6px 10px; border-radius:999px; }
+    .grid { display:grid; grid-template-columns: 1fr; gap:16px; margin-top:16px; }
+    @media (min-width: 860px) { .grid { grid-template-columns: 2fr 1fr; } }
+    .section-title { font-size:14px; color:var(--muted); margin-bottom:8px; text-transform:uppercase; letter-spacing:.12em; }
+    table { width:100%; border-collapse: collapse; font-size:14px; }
+    th, td { text-align:left; padding:10px 8px; border-bottom:1px solid #1f2a38; }
+    th { color:var(--muted); font-weight:600; }
+    .chosen { color: var(--ok); font-weight:800; }
+    .muted { color: var(--muted); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .out { white-space:pre-wrap; background:#0c121a; border:1px solid #1f2a38; border-radius:12px; padding:12px; min-height:110px; }
+    .err { color:#ff6b6b; font-weight:700; }
+    .spin { display:inline-block; width:14px; height:14px; border: 2px solid #a3c9ff; border-top-color: transparent; border-radius:50%; animation: sp .8s linear infinite; vertical-align: -2px; margin-right:8px; }
+    @keyframes sp { to { transform: rotate(360deg); } }
+    a { color: var(--accent); text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="title"><span class="dot"></span> ModelMatch — Best-Model Router</div>
+    <p class="muted">Type any task (coding, reasoning, summarization, or link-heavy). This page calls your local FastAPI backend at <span class="mono">http://127.0.0.1:8000/route</span>.</p>
+
+    <div class="card" style="margin-top:14px;">
+      <div class="row">
+        <textarea id="prompt" placeholder="e.g. Write Python unit tests for a FastAPI endpoint that returns JSON."></textarea>
+      </div>
+      <div class="row" style="margin-top:10px; align-items:center;">
+        <button id="runBtn">Find best model</button>
+        <div id="status" class="muted"></div>
+      </div>
+
+      <div class="grid">
+        <div>
+          <div class="section-title">Result</div>
+          <div id="output" class="out muted">Run a task to see the output here.</div>
+            <div class="row" style="margin-top:10px; gap:8px;">
+              <button id="upBtn" disabled>👍 Looks good</button>
+              <button id="downBtn" disabled>👎 Not helpful</button>
+              <span id="fbStatus" class="muted"></span>
+            </div>
+          <div class="section-title">Routing Decision</div>
+          <div id="meta" class="meta">
+            <span class="pill">Task: <span id="taskType" class="mono">—</span></span>
+            <span class="pill">Chosen: <span id="chosen" class="mono">—</span></span>
+            <span class="pill">Latency: <span id="lat" class="mono">—</span> ms</span>
+          </div>
+          <div style="margin-top:10px;">
+            <table>
+              <thead>
+                <tr><th>Model</th><th>Score</th></tr>
+              </thead>
+              <tbody id="candidates">
+                <tr><td class="muted">—</td><td class="muted">—</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <p class="muted" style="margin-top:16px;">Tip: your backend must be running: <span class="mono">uvicorn app:app --reload</span></p>
+    </div>
+  </div>
+
+  <script>
+    const $ = id => document.getElementById(id);
+    const runBtn = $("runBtn");
+    const status = $("status");
+    const out = $("output");
+    const taskType = $("taskType");
+    const chosen = $("chosen");
+    const lat = $("lat");
+    const candidates = $("candidates");
+
+    async function run() {
+      const prompt = $("prompt").value.trim();
+      if (!prompt) { alert("Please enter a prompt first."); return; }
+
+      runBtn.disabled = true;
+      status.innerHTML = '<span class="spin"></span>Routing…';
+      out.textContent = "";
+      out.classList.remove("muted","err");
+      out.classList.add("muted");
+      taskType.textContent = "—";
+      chosen.textContent = "—";
+      lat.textContent = "—";
+      candidates.innerHTML = `<tr><td class="muted">—</td><td class="muted">—</td></tr>`;
+
+      try {
+        const res = await fetch("http://127.0.0.1:8000/route", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prompt })
+        });
+
+        const isJSON = (res.headers.get("content-type") || "").includes("application/json");
+        if (!res.ok) {
+          const text = isJSON ? JSON.stringify(await res.json(), null, 2) : await res.text();
+          throw new Error(`HTTP ${res.status}\n${text}`);
+        }
+
+        const data = isJSON ? await res.json() : {};
+        // Fill meta
+        taskType.textContent = data.task_type || "—";
+        chosen.textContent = data.chosen || "—";
+        if (data.chosen) chosen.classList.add("chosen"); else chosen.classList.remove("chosen");
+        lat.textContent = typeof data.latency_ms === "number" ? data.latency_ms : "—";
+
+        // Output
+        out.classList.remove("muted","err");
+        out.textContent = data.output || "(no output)";
+        if (!data.output) out.classList.add("muted");
+
+        // Candidates table
+        if (Array.isArray(data.candidates) && data.candidates.length) {
+          candidates.innerHTML = data.candidates
+            .map(c => `<tr><td class="mono">${c.model}</td><td class="mono">${c.score}</td></tr>`)
+            .join("");
+        } else {
+          candidates.innerHTML = `<tr><td class="muted">—</td><td class="muted">—</td></tr>`;
+        }
+
+        status.textContent = "Done.";
+      } catch (err) {
+        console.error(err);
+        out.classList.remove("muted");
+        out.classList.add("err");
+        out.textContent = String(err.message || err);
+        status.textContent = "Error.";
+      } finally {
+        runBtn.disabled = false;
+      }
+    }
+
+        runBtn.addEventListener("click", run);
+
+        // Prefill a helpful example
+        $("prompt").value = "Write Python unit tests for a FastAPI endpoint that returns JSON.";
+
+        // --- Feedback logic ---
+    let lastChosen = null;
+
+    // Hook into the existing run() — update it to track the last chosen model
+    const originalRun = run;
+    run = async function() {
+        await originalRun();  // run the existing logic
+        // enable feedback buttons once we have a result
+        lastChosen = chosen.textContent !== "—" ? chosen.textContent : null;
+        $("upBtn").disabled = !lastChosen;
+        $("downBtn").disabled = !lastChosen;
+        $("fbStatus").textContent = "";
+    };
+
+    async function sendFeedback(rating) {
+        if (!lastChosen) return;
+        $("fbStatus").textContent = "Sending feedback…";
+        try {
+        await fetch("http://127.0.0.1:8000/feedback", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chosen: lastChosen, rating, note: null })
+        });
+        $("fbStatus").textContent = "✅ Thanks! Router will learn from this.";
+        } catch {
+        $("fbStatus").textContent = "❌ Feedback failed.";
+        }
+    }
+
+    $("upBtn").addEventListener("click", () => sendFeedback(1));
+    $("downBtn").addEventListener("click", () => sendFeedback(-1));
+
+  </script>
+</body>
+</html>
