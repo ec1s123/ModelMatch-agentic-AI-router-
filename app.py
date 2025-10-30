@@ -22,6 +22,7 @@ app.add_middleware(
 
 class RouteRequest(BaseModel):
     prompt: str
+    mode: str | None = "balanced"   # "balanced" | "quality" | "cost"
 
 class RouteResponse(BaseModel):
     task_type: str
@@ -29,6 +30,7 @@ class RouteResponse(BaseModel):
     chosen: str
     output: str
     latency_ms: int
+    # mode: str | None = None  # (optional) include if you want to display it
 
 LOG_DIR = "logs"
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -43,7 +45,9 @@ def route(req: RouteRequest):
     task = classify_task(req.prompt)
     query = f"best llm for {task['task_type']} tasks benchmark 2025"
     search_payload = you_search(query)
-    ranked = rank_models(task["task_type"], search_payload)
+
+    # ← pass mode through to ranking
+    ranked = rank_models(task["task_type"], search_payload, mode=req.mode or "balanced")
     chosen = ranked[0]["model"]
 
     t0 = time.time()
@@ -53,25 +57,13 @@ def route(req: RouteRequest):
     cost_est = COST.get(chosen, 0.0015)
     record_selection(chosen, latency_ms, cost_est)
 
-    event = {
-        "ts": datetime.now(timezone.utc).isoformat(),
-        "task": req.prompt,
-        "task_type": task["task_type"],
-        "candidates": ranked,
-        "chosen": chosen,
-        "latency_ms": latency_ms,
-        "cost_est": cost_est,
-        "user_feedback": None
-    }
-    with open(LOG_FILE, "a", encoding="utf-8") as f:
-        f.write(json.dumps(event) + "\n")
-
     return RouteResponse(
         task_type=task["task_type"],
         candidates=ranked,
         chosen=chosen,
         output=output,
-        latency_ms=latency_ms
+        latency_ms=latency_ms,
+        # mode=req.mode  # (optional)
     )
 
 class Feedback(BaseModel):
