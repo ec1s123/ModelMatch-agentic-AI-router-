@@ -61,25 +61,33 @@ def evidence_boost(task_type: str, search_payload: dict) -> dict:
         boost["claude-haiku"] += 0.04; boost["gemini-flash"] += 0.02
     return boost
 
-def rank_models(task_type: str, search_payload: dict, epsilon: float = 0.03):
+MODE_COST_MULT = {
+    "balanced": 1.0,     # current behavior
+    "quality": 0.0,      # ignore cost completely
+    "cost": 1.5          # emphasize cost (optional)
+}
+
+def rank_models(task_type: str, search_payload: dict, mode: str = "balanced", epsilon: float = 0.03):
     pri = PRIORS[task_type]
     evb = evidence_boost(task_type, search_payload)
     metrics = load_metrics()
     dyn = {m: dynamic_adjustment(m, metrics) for m in pri.keys()}
 
+    # cost multiplier based on mode
+    cost_mult = MODE_COST_MULT.get(mode.lower(), 1.0)
+
     scored = []
     for m in pri:
         score = (
             (ALPHA * pri[m]) +
-            (BETA  * (1.0 - COST[m])) +
+            (BETA  * cost_mult * (1.0 - COST[m])) +  # ← mode-aware
             (GAMMA * (1.0 - LAT[m])) +
             (DELTA * evb[m]) +
-            dyn[m]  # learned adjustments from metrics
+            dyn[m]
         )
         scored.append({"model": m, "score": round(score, 4)})
 
     ranked = sorted(scored, key=lambda x: x["score"], reverse=True)
-    # epsilon-greedy exploration (helps learning, adds variety)
     if len(ranked) > 1 and random.random() < epsilon:
         ranked[0], ranked[1] = ranked[1], ranked[0]
     return ranked
